@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>access-cli</AssemblyName>
+    <RootNamespace>AccessCli</RootNamespace>
+    <Version>0.2.0</Version>
+    <Description>Microsoft Access VBA / Form editing CLI</Description>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>access-cli</ToolCommandName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.4" />
+  </ItemGroup>
+
+</Project>

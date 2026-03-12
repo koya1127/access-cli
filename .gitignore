@@ -8,3 +8,10 @@ build/
 *.mdb
 *.laccdb
 C:/Temp/
+
+# C# build artifacts
+bin/
+obj/
+*.user
+*.suo
+.vs/
