@@ -138,6 +138,80 @@ importFormCmd.SetAction(r =>
     Console.WriteLine($"インポート完了: {form}");
 });
 
+// ─── export-all ───────────────────────────────────────────────
+var exportAllCmd = new Command("export-all", "全モジュール・全フォームをディレクトリにテキスト出力");
+var outDirArg = new Argument<DirectoryInfo>("output_dir") { Description = "出力先ディレクトリ" };
+exportAllCmd.Add(dbArg);
+exportAllCmd.Add(outDirArg);
+exportAllCmd.SetAction(r =>
+{
+    var db     = r.GetValue(dbArg)!;
+    var outDir = r.GetValue(outDirArg)!;
+    svc.ExportAll(db.FullName, outDir.FullName);
+    Console.WriteLine($"エクスポート完了: {outDir.FullName}");
+});
+
+// ─── import-all ───────────────────────────────────────────────
+var importAllCmd = new Command("import-all", "ディレクトリから全モジュール・全フォームを一括インポート");
+var inDirArg = new Argument<DirectoryInfo>("input_dir") { Description = "インポート元ディレクトリ" };
+importAllCmd.Add(dbArg);
+importAllCmd.Add(inDirArg);
+importAllCmd.SetAction(r =>
+{
+    var db    = r.GetValue(dbArg)!;
+    var inDir = r.GetValue(inDirArg)!;
+    svc.ImportAll(db.FullName, inDir.FullName);
+    Console.WriteLine("インポート完了");
+});
+
+// ─── list-tables ──────────────────────────────────────────────
+var listTablesCmd = new Command("list-tables", "テーブル一覧を表示");
+listTablesCmd.Add(dbArg);
+listTablesCmd.SetAction(r =>
+{
+    var db = r.GetValue(dbArg)!;
+    foreach (var t in svc.ListTables(db.FullName))
+        Console.WriteLine(t);
+});
+
+// ─── query-sql ────────────────────────────────────────────────
+var querySqlCmd = new Command("query-sql", "SELECT文を実行して結果をTSV出力");
+var sqlArg     = new Argument<string>("sql")      { Description = "SQL文（SELECT）" };
+var sqlFileOpt = new Option<FileInfo?>("--sql-file", "-f");
+sqlFileOpt.Description = "SQLをファイルから読み込む（日本語テーブル名などに使用）";
+querySqlCmd.Add(dbArg);
+querySqlCmd.Add(sqlArg);
+querySqlCmd.Add(sqlFileOpt);
+querySqlCmd.SetAction(r =>
+{
+    var db      = r.GetValue(dbArg)!;
+    var sqlDirect = r.GetValue(sqlArg)!;
+    var sqlFile = r.GetValue(sqlFileOpt);
+    var sql = sqlFile is not null
+        ? File.ReadAllText(sqlFile.FullName).Trim().TrimStart('\uFEFF') // BOM除去
+        : sqlDirect;
+    var rows = svc.QuerySql(db.FullName, sql);
+    foreach (var row in rows)
+        Console.WriteLine(string.Join("\t", row));
+});
+
+// ─── exec-sql ─────────────────────────────────────────────────
+var execSqlCmd = new Command("exec-sql", "INSERT/UPDATE/DELETE を実行");
+execSqlCmd.Add(dbArg);
+execSqlCmd.Add(sqlArg);
+execSqlCmd.Add(sqlFileOpt);
+execSqlCmd.SetAction(r =>
+{
+    var db      = r.GetValue(dbArg)!;
+    var sqlDirect = r.GetValue(sqlArg)!;
+    var sqlFile = r.GetValue(sqlFileOpt);
+    var sql = sqlFile is not null
+        ? File.ReadAllText(sqlFile.FullName).Trim().TrimStart('\uFEFF') // BOM除去
+        : sqlDirect;
+    svc.ExecSql(db.FullName, sql);
+    Console.WriteLine("実行完了");
+});
+
 // ─── ルートコマンド ────────────────────────────────────────────────
 var rootCmd = new RootCommand("Microsoft Access VBA・フォーム編集CLI");
 rootCmd.Add(listModulesCmd);
@@ -148,6 +222,11 @@ rootCmd.Add(listControlsCmd);
 rootCmd.Add(setCaptionCmd);
 rootCmd.Add(exportFormCmd);
 rootCmd.Add(importFormCmd);
+rootCmd.Add(exportAllCmd);
+rootCmd.Add(importAllCmd);
+rootCmd.Add(listTablesCmd);
+rootCmd.Add(querySqlCmd);
+rootCmd.Add(execSqlCmd);
 
 // 更新チェックをすぐタイムアウトさせて（起動遅延なし）
 try { await updateTask.WaitAsync(TimeSpan.Zero); } catch { }

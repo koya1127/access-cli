@@ -243,6 +243,329 @@ public sealed class AccessService : IAccessService
         return count;
     }
 
+    public void ExportAll(string dbPath, string outputDir)
+    {
+        dbPath = ResolveAbsPath(dbPath);
+        string modulesDir = Path.Combine(outputDir, "modules");
+        string formsDir   = Path.Combine(outputDir, "forms");
+        Directory.CreateDirectory(modulesDir);
+        Directory.CreateDirectory(formsDir);
+
+        dynamic access = CreateAccessApp();
+        try
+        {
+            access.Visible = false;
+            access.AutomationSecurity = 3;
+            access.OpenCurrentDatabase(dbPath, false);
+
+            dynamic proj = access.VBE.VBProjects.Item(1);
+            int count = proj.VBComponents.Count;
+            for (int i = 1; i <= count; i++)
+            {
+                dynamic comp = proj.VBComponents.Item(i);
+                string name = (string)comp.Name;
+                int type = (int)comp.Type;
+
+                if (type == 1 || type == 2) // Module / Class
+                {
+                    int lines = (int)comp.CodeModule.CountOfLines;
+                    string code = lines > 0 ? (string)comp.CodeModule.Lines(1, lines) : "";
+                    File.WriteAllText(Path.Combine(modulesDir, name + ".bas"), code, System.Text.Encoding.UTF8);
+                    Console.WriteLine($"[module] {name}");
+                }
+                else if (type == 100) // Form / Report
+                {
+                    string accessName;
+                    int objectType;
+                    if (name.StartsWith("Form_"))        { accessName = name[5..]; objectType = 2; }
+                    else if (name.StartsWith("Report_")) { accessName = name[7..]; objectType = 3; }
+                    else continue;
+
+                    string outPath = Path.Combine(formsDir, name + ".form");
+                    access.SaveAsText(objectType, accessName, outPath);
+                    Console.WriteLine($"[form]   {name}");
+                }
+            }
+        }
+        finally
+        {
+            SafeQuit(access);
+        }
+    }
+
+    public void ImportAll(string dbPath, string inputDir)
+    {
+        dbPath = ResolveAbsPath(dbPath);
+
+        dynamic access = CreateAccessApp();
+        try
+        {
+            access.Visible = true;
+            access.AutomationSecurity = 3;
+            access.OpenCurrentDatabase(dbPath, true); // exclusive
+
+            // モジュール (.bas)
+            string modulesDir = Path.Combine(inputDir, "modules");
+            if (Directory.Exists(modulesDir))
+            {
+                dynamic proj = access.VBE.VBProjects.Item(1);
+                foreach (string file in Directory.GetFiles(modulesDir, "*.bas"))
+                {
+                    string moduleName = Path.GetFileNameWithoutExtension(file);
+                    string code = File.ReadAllText(file, System.Text.Encoding.UTF8);
+                    dynamic comp = proj.VBComponents(moduleName);
+                    dynamic cm = comp.CodeModule;
+                    int existing = (int)cm.CountOfLines;
+                    if (existing > 0) cm.DeleteLines(1, existing);
+                    cm.InsertLines(1, code);
+                    Console.WriteLine($"[module] {moduleName}");
+                }
+            }
+
+            // フォーム・レポート (.form)
+            string formsDir = Path.Combine(inputDir, "forms");
+            if (Directory.Exists(formsDir))
+            {
+                foreach (string file in Directory.GetFiles(formsDir, "*.form"))
+                {
+                    string compName = Path.GetFileNameWithoutExtension(file);
+                    string accessName;
+                    int objectType;
+                    if (compName.StartsWith("Form_"))        { accessName = compName[5..]; objectType = 2; }
+                    else if (compName.StartsWith("Report_")) { accessName = compName[7..]; objectType = 3; }
+                    else continue;
+
+                    access.LoadFromText(objectType, accessName, Path.GetFullPath(file));
+                    Console.WriteLine($"[form]   {compName}");
+                }
+            }
+
+            access.CloseCurrentDatabase();
+        }
+        finally
+        {
+            SafeQuit(access);
+        }
+    }
+
+    public IReadOnlyList<string> ListTables(string dbPath)
+    {
+        dbPath = ResolveAbsPath(dbPath);
+        dynamic access = CreateAccessApp();
+        try
+        {
+            access.Visible = false;
+            access.AutomationSecurity = 3;
+            access.OpenCurrentDatabase(dbPath, false);
+
+            dynamic db = access.CurrentDb();
+            var result = new List<string>();
+            int count = (int)db.TableDefs.Count;
+            for (int i = 0; i < count; i++)
+            {
+                dynamic td = db.TableDefs(i);
+                string name = (string)td.Name;
+                if (name.StartsWith("MSys")) continue;
+                string connect = "";
+                try { connect = (string)td.Connect; } catch { }
+                string label = string.IsNullOrEmpty(connect) ? name : $"{name}  [linked: {connect}]";
+                result.Add(label);
+            }
+            return result;
+        }
+        finally
+        {
+            SafeQuit(access);
+        }
+    }
+
+    public IReadOnlyList<string[]> QuerySql(string dbPath, string sql)
+    {
+        dbPath = ResolveAbsPath(dbPath);
+        dynamic db = OpenDaoDatabase(dbPath);
+        try
+        {
+            // ACE SQL パーサーは Unicode 識別子を正しく扱えないため、
+            // 単純な "SELECT * FROM [table]" の場合は TableDef をインデックスで検索して Recordset を開く
+            dynamic rs;
+            string? tableOnly = TryExtractTableName(sql);
+            if (tableOnly is not null)
+            {
+                dynamic? foundTd = FindTableDefByName(db, tableOnly);
+                if (foundTd is null)
+                    throw new InvalidOperationException($"テーブルが見つかりません: {tableOnly}");
+                rs = foundTd.OpenRecordset(4); // 4 = dbOpenSnapshot
+            }
+            else
+            {
+                rs = db.OpenRecordset(sql, 4);
+            }
+
+            var results = new List<string[]>();
+            int fieldCount = (int)rs.Fields.Count;
+
+            var header = new string[fieldCount];
+            for (int i = 0; i < fieldCount; i++)
+                header[i] = (string)rs.Fields(i).Name;
+            results.Add(header);
+
+            while (!(bool)rs.EOF)
+            {
+                var row = new string[fieldCount];
+                for (int i = 0; i < fieldCount; i++)
+                {
+                    object val = rs.Fields(i).Value;
+                    row[i] = val is null || val is DBNull ? "" : val.ToString()!;
+                }
+                results.Add(row);
+                rs.MoveNext();
+            }
+            rs.Close();
+            return results;
+        }
+        finally
+        {
+            db.Close();
+        }
+    }
+
+    /// <summary>
+    /// TableDefs コレクションをインデックスでイテレートして .NET 側で名前比較する
+    /// （COM 引数に日本語文字列を渡すと失敗するため）
+    /// </summary>
+    private static dynamic? FindTableDefByName(dynamic db, string name)
+    {
+        int count = (int)db.TableDefs.Count;
+        for (int i = 0; i < count; i++)
+        {
+            dynamic td = db.TableDefs(i);
+            if ((string)td.Name == name)
+                return td;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// "SELECT * FROM [table]" または "SELECT * FROM table" の形式のとき
+    /// テーブル名だけを返す（WHERE句などがある場合は null）
+    /// </summary>
+    private static string? TryExtractTableName(string sql)
+    {
+        // 正規化: 前後の空白と改行を除去
+        var s = sql.Trim();
+        // "SELECT" で始まり "FROM" を含む場合のみ
+        var m = System.Text.RegularExpressions.Regex.Match(
+            s,
+            @"^\s*SELECT\s+\*\s+FROM\s+\[?([^\]\s]+)\]?\s*$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    public void ExecSql(string dbPath, string sql)
+    {
+        dbPath = ResolveAbsPath(dbPath);
+
+        // INSERT の場合は DAO AddNew/Update で処理（ACE SQL パーサーの Unicode 問題を回避）
+        var insert = TryParseInsert(sql);
+        if (insert is not null)
+        {
+            ExecInsert(dbPath, insert.Value.table, insert.Value.columns, insert.Value.values);
+            return;
+        }
+
+        // その他（UPDATE/DELETE、英語テーブル名）は直接実行
+        dynamic db = OpenDaoDatabase(dbPath);
+        try
+        {
+            db.Execute(sql, 128); // 128 = dbFailOnError
+        }
+        finally
+        {
+            db.Close();
+        }
+    }
+
+    private void ExecInsert(string dbPath, string tableName, string[] columns, string[] values)
+    {
+        dynamic db = OpenDaoDatabase(dbPath);
+        try
+        {
+            dynamic? td = FindTableDefByName(db, tableName);
+            if (td is null)
+                throw new InvalidOperationException($"テーブルが見つかりません: {tableName}");
+
+            dynamic rs = td.OpenRecordset(2); // 2 = dbOpenDynaset
+
+            // フィールド名→インデックスのマップを .NET 側で構築
+            int fcount = (int)rs.Fields.Count;
+            var fieldMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < fcount; i++)
+                fieldMap[(string)rs.Fields(i).Name] = i;
+
+            rs.AddNew();
+            for (int i = 0; i < columns.Length; i++)
+            {
+                if (fieldMap.TryGetValue(columns[i], out int fi))
+                    rs.Fields(fi).Value = ParseSqlLiteral(values[i]);
+            }
+            rs.Update();
+            rs.Close();
+        }
+        finally
+        {
+            db.Close();
+        }
+    }
+
+    private static (string table, string[] columns, string[] values)? TryParseInsert(string sql)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(
+            sql.Trim(),
+            @"^\s*INSERT\s+INTO\s+\[?([^\]\s,]+)\]?\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)\s*;?\s*$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (!m.Success) return null;
+
+        string table = m.Groups[1].Value.Trim();
+        string[] cols = SplitSqlList(m.Groups[2].Value);
+        string[] vals = SplitSqlList(m.Groups[3].Value);
+        // [ ] を除去
+        cols = cols.Select(c => c.Trim('[', ']', ' ')).ToArray();
+        return (table, cols, vals);
+    }
+
+    private static string[] SplitSqlList(string s)
+    {
+        var items = new List<string>();
+        int depth = 0;
+        bool inQuote = false;
+        int start = 0;
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c == '\'' && !inQuote) inQuote = true;
+            else if (c == '\'' && inQuote) inQuote = false;
+            else if (c == ',' && !inQuote && depth == 0)
+            {
+                items.Add(s[start..i].Trim());
+                start = i + 1;
+            }
+        }
+        items.Add(s[start..].Trim());
+        return items.ToArray();
+    }
+
+    private static object ParseSqlLiteral(string s)
+    {
+        s = s.Trim();
+        if (s.StartsWith('\'') && s.EndsWith('\''))
+            return s[1..^1].Replace("''", "'");
+        if (long.TryParse(s, out long l)) return l;
+        if (double.TryParse(s, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out double d)) return d;
+        if (s.Equals("NULL", StringComparison.OrdinalIgnoreCase)) return DBNull.Value;
+        return s;
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────
 
     private static string ResolveAbsPath(string path)
@@ -251,6 +574,15 @@ public sealed class AccessService : IAccessService
         if (!File.Exists(path))
             throw new FileNotFoundException($"ファイルが見つかりません: {path}");
         return path;
+    }
+
+    private static dynamic OpenDaoDatabase(string dbPath)
+    {
+        Type? t = Type.GetTypeFromProgID("DAO.DBEngine.120")
+            ?? throw new InvalidOperationException("DAO.DBEngine.120 が見つかりません。Access Database Engine をインストールしてください");
+        dynamic engine = Activator.CreateInstance(t)
+            ?? throw new InvalidOperationException("DAO.DBEngine.120 を起動できませんでした");
+        return engine.Workspaces(0).OpenDatabase(dbPath, false, false, "");
     }
 
     private static dynamic CreateAccessApp()
