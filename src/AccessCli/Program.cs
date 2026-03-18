@@ -164,6 +164,20 @@ importAllCmd.SetAction(r =>
     Console.WriteLine("インポート完了");
 });
 
+// ─── list-queries ─────────────────────────────────────────────
+var listQueriesCmd = new Command("list-queries", "保存クエリ一覧とSQL定義を表示");
+listQueriesCmd.Add(dbArg);
+listQueriesCmd.SetAction(r =>
+{
+    var db = r.GetValue(dbArg)!;
+    foreach (var q in svc.ListQueries(db.FullName))
+    {
+        Console.WriteLine($"=== {q.Name} ===");
+        Console.WriteLine(q.Sql);
+        Console.WriteLine();
+    }
+});
+
 // ─── list-tables ──────────────────────────────────────────────
 var listTablesCmd = new Command("list-tables", "テーブル一覧を表示");
 listTablesCmd.Add(dbArg);
@@ -212,6 +226,59 @@ execSqlCmd.SetAction(r =>
     Console.WriteLine("実行完了");
 });
 
+// ─── get-query-sql ────────────────────────────────────────────
+var getQuerySqlCmd = new Command("get-query-sql", "保存クエリのSQL定義をファイルに出力");
+var queryNameArg2 = new Argument<string>("query_name") { Description = "クエリ名" };
+getQuerySqlCmd.Add(dbArg);
+getQuerySqlCmd.Add(queryNameArg2);
+getQuerySqlCmd.Add(outputOpt);
+getQuerySqlCmd.SetAction(r =>
+{
+    var db     = r.GetValue(dbArg)!;
+    var qname  = r.GetValue(queryNameArg2)!;
+    var output = r.GetValue(outputOpt);
+    string sql = svc.GetQuerySql(db.FullName, qname);
+    if (output is not null)
+    {
+        File.WriteAllText(output.FullName, sql, System.Text.Encoding.UTF8);
+        Console.WriteLine($"出力完了: {output.FullName}");
+    }
+    else
+    {
+        Console.Write(sql);
+    }
+});
+
+// ─── export-queries ───────────────────────────────────────────
+var exportQueriesCmd = new Command("export-queries", "全クエリのSQLをディレクトリにファイル出力");
+var queriesOutDirArg = new Argument<DirectoryInfo>("output_dir") { Description = "出力先ディレクトリ" };
+exportQueriesCmd.Add(dbArg);
+exportQueriesCmd.Add(queriesOutDirArg);
+exportQueriesCmd.SetAction(r =>
+{
+    var db     = r.GetValue(dbArg)!;
+    var outDir = r.GetValue(queriesOutDirArg)!;
+    svc.ExportAllQueries(db.FullName, outDir.FullName);
+    Console.WriteLine($"エクスポート完了: {outDir.FullName}");
+});
+
+// ─── set-query-sql ────────────────────────────────────────────
+var setQuerySqlCmd = new Command("set-query-sql", "保存クエリのSQL定義をファイルから書き換える");
+var queryNameArg = new Argument<string>("query_name") { Description = "クエリ名" };
+setQuerySqlCmd.Add(dbArg);
+setQuerySqlCmd.Add(queryNameArg);
+setQuerySqlCmd.Add(sqlFileOpt);
+setQuerySqlCmd.SetAction(r =>
+{
+    var db        = r.GetValue(dbArg)!;
+    var qname     = r.GetValue(queryNameArg)!;
+    var sqlFile   = r.GetValue(sqlFileOpt);
+    if (sqlFile is null) { Console.Error.WriteLine("--sql-file / -f が必要です"); Environment.Exit(1); }
+    var sql = File.ReadAllText(sqlFile.FullName).Trim().TrimStart('\uFEFF');
+    svc.SetQuerySql(db.FullName, qname, sql);
+    Console.WriteLine($"クエリ更新完了: {qname}");
+});
+
 // ─── ルートコマンド ────────────────────────────────────────────────
 var rootCmd = new RootCommand("Microsoft Access VBA・フォーム編集CLI");
 rootCmd.Add(listModulesCmd);
@@ -224,9 +291,13 @@ rootCmd.Add(exportFormCmd);
 rootCmd.Add(importFormCmd);
 rootCmd.Add(exportAllCmd);
 rootCmd.Add(importAllCmd);
+rootCmd.Add(listQueriesCmd);
 rootCmd.Add(listTablesCmd);
 rootCmd.Add(querySqlCmd);
 rootCmd.Add(execSqlCmd);
+rootCmd.Add(setQuerySqlCmd);
+rootCmd.Add(getQuerySqlCmd);
+rootCmd.Add(exportQueriesCmd);
 
 // 更新チェックをすぐタイムアウトさせて（起動遅延なし）
 try { await updateTask.WaitAsync(TimeSpan.Zero); } catch { }

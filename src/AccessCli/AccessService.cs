@@ -379,6 +379,31 @@ public sealed class AccessService : IAccessService
         }
     }
 
+    public IReadOnlyList<QueryInfo> ListQueries(string dbPath)
+    {
+        dbPath = ResolveAbsPath(dbPath);
+        dynamic db = OpenDaoDatabase(dbPath);
+        try
+        {
+            var result = new List<QueryInfo>();
+            int count = (int)db.QueryDefs.Count;
+            for (int i = 0; i < count; i++)
+            {
+                dynamic qd = db.QueryDefs(i);
+                string name = (string)qd.Name;
+                if (name.StartsWith("~")) continue; // 一時クエリ
+                string sql = "";
+                try { sql = (string)qd.SQL; } catch { }
+                result.Add(new QueryInfo(name, sql));
+            }
+            return result;
+        }
+        finally
+        {
+            db.Close();
+        }
+    }
+
     public IReadOnlyList<string[]> QuerySql(string dbPath, string sql)
     {
         dbPath = ResolveAbsPath(dbPath);
@@ -564,6 +589,78 @@ public sealed class AccessService : IAccessService
             System.Globalization.CultureInfo.InvariantCulture, out double d)) return d;
         if (s.Equals("NULL", StringComparison.OrdinalIgnoreCase)) return DBNull.Value;
         return s;
+    }
+
+    public string GetQuerySql(string dbPath, string queryName)
+    {
+        dbPath = ResolveAbsPath(dbPath);
+        dynamic db = OpenDaoDatabase(dbPath);
+        try
+        {
+            int count = (int)db.QueryDefs.Count;
+            for (int i = 0; i < count; i++)
+            {
+                dynamic qd = db.QueryDefs(i);
+                string name = (string)qd.Name;
+                if (name == queryName || name.Contains(queryName))
+                    return (string)qd.SQL;
+            }
+            throw new InvalidOperationException($"クエリが見つかりません: {queryName}");
+        }
+        finally
+        {
+            db.Close();
+        }
+    }
+
+    public void ExportAllQueries(string dbPath, string outputDir)
+    {
+        dbPath = ResolveAbsPath(dbPath);
+        Directory.CreateDirectory(outputDir);
+        dynamic db = OpenDaoDatabase(dbPath);
+        try
+        {
+            int count = (int)db.QueryDefs.Count;
+            for (int i = 0; i < count; i++)
+            {
+                dynamic qd = db.QueryDefs(i);
+                string name = (string)qd.Name;
+                if (name.StartsWith("~")) continue;
+                string sql = "";
+                try { sql = (string)qd.SQL; } catch { }
+                string safeName = string.Join("_", name.Split(Path.GetInvalidFileNameChars()));
+                File.WriteAllText(Path.Combine(outputDir, safeName + ".sql"), sql, System.Text.Encoding.UTF8);
+                Console.WriteLine(name);
+            }
+        }
+        finally
+        {
+            db.Close();
+        }
+    }
+
+    public void SetQuerySql(string dbPath, string queryName, string sql)
+    {
+        dbPath = ResolveAbsPath(dbPath);
+        dynamic db = OpenDaoDatabase(dbPath);
+        try
+        {
+            int count = (int)db.QueryDefs.Count;
+            for (int i = 0; i < count; i++)
+            {
+                dynamic qd = db.QueryDefs(i);
+                if ((string)qd.Name == queryName)
+                {
+                    qd.SQL = sql;
+                    return;
+                }
+            }
+            throw new InvalidOperationException($"クエリが見つかりません: {queryName}");
+        }
+        finally
+        {
+            db.Close();
+        }
     }
 
     // ─── Helpers ────────────────────────────────────────────────────
