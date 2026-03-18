@@ -10,7 +10,7 @@ namespace AccessCli;
 public static class Updater
 {
     private const string CurrentVersion = "0.3.0";
-    private const string ApiUrl = "https://api.github.com/repos/YOUR_ORG/access-cli/releases/latest";
+    private const string ApiUrl = "https://api.github.com/repos/koya1127/access-cli/releases/latest";
     private static readonly TimeSpan CheckInterval = TimeSpan.FromHours(24);
     private static readonly string CacheFile = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
